@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { useDoc } from "./store";
 import { useUi } from "./ui";
 import { useSearch } from "./search";
-import { ensureAllDocumentFonts } from "./font";
+import { frameFontKeys, ensureAllDocumentFonts } from "./font";
 import {
   saveDocument,
   saveDocumentAs,
@@ -153,7 +153,7 @@ export function useShortcuts() {
   // Subscribing here covers the whole document, including after undo/redo/open.
   useEffect(() => {
     const sync = (pages: ReturnType<typeof useDoc.getState>["pages"]) => {
-      ensureAllDocumentFonts(pages.flatMap((p) => p.frames.map((f) => f.fontKey))).catch(
+      ensureAllDocumentFonts(pages.flatMap((p) => p.frames.flatMap(frameFontKeys))).catch(
         () => {}
       );
     };

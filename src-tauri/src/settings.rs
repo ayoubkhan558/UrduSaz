@@ -19,6 +19,10 @@ pub struct AiSettings {
     /// Optional model id override.
     #[serde(default)]
     pub model: String,
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub system_prompt: String,
 }
 
 /// What we return to the UI — never includes the raw key, only whether one is set.
@@ -27,6 +31,8 @@ pub struct AiSettingsView {
     pub provider: String,
     pub model: String,
     pub has_key: bool,
+    pub endpoint: String,
+    pub system_prompt: String,
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -86,7 +92,11 @@ fn migrate_legacy(path: &std::path::Path) {
         }
     }
     // Copy, not move: the old app (if still installed) keeps working.
-    let _ = std::fs::copy(&old, path);
+    if let Ok(json) = std::fs::read_to_string(&old) {
+        if let Ok(settings) = serde_json::from_str::<AiSettings>(&json) {
+            let _ = save(&settings);
+        }
+    }
 }
 
 /// Load persisted settings (empty default if none / unreadable).
@@ -106,7 +116,24 @@ pub fn save(settings: &AiSettings) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| format!("Could not create config dir: {e}"))?;
     }
     let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| format!("Could not write settings: {e}"))?;
+    use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+    let parent = path.parent().ok_or("Missing configuration directory")?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
+    let temp = parent.join(format!(".ai-settings-{}-{nonce}", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&temp).map_err(|e| format!("Could not create settings: {e}"))?;
+    let written = file.write_all(json.as_bytes()).and_then(|_| file.sync_all());
+    drop(file);
+    if let Err(error) = written.and_then(|_| std::fs::rename(&temp, &path)) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("Could not write settings: {error}"));
+    }
     Ok(())
 }
 
@@ -116,5 +143,7 @@ pub fn view() -> AiSettingsView {
         provider: s.provider,
         model: s.model,
         has_key: !s.api_key.trim().is_empty(),
+        endpoint: s.endpoint,
+        system_prompt: s.system_prompt,
     }
 }

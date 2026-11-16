@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import type { DocFile, TextFrame } from "../lib/store";
 import { siteUrl } from "../lib/cloud";
 import { downloadBytes } from "../lib/download";
-import { ensureAllDocumentFonts, getFont } from "../lib/font";
+import { frameFontKeys, ensureAllDocumentFonts, getFont } from "../lib/font";
 import { safeSharedHtml, sharedImage, sharedColor } from "../lib/sharedContent";
 import { SHAPES, shapePaint, shapePath } from "../editor/shapeGeometry";
 import { pageNumber } from "../editor/publishing";
@@ -25,7 +25,7 @@ export function SharedDocument({token}:{token:string}){
   const [zoom,setZoom]=useState(.85);
   useEffect(()=>{
     let active=true;document.title="Shared document — Harfsaz";
-    const refresh=async()=>{try{const response=await fetch(siteUrl(`/api/v1/shared?token=${encodeURIComponent(token)}`),{cache:"no-store",credentials:"omit",referrerPolicy:"no-referrer"});const result=await response.json();if(!active)return;if(!response.ok){setFile(null);throw Error(result.error||"Shared document unavailable.");}setFile(result.document);setError("");document.title=`${result.document.name} — Harfsaz`;void ensureAllDocumentFonts(result.document.content.pages.flatMap((p:DocFile["pages"][number])=>p.frames.map(f=>f.fontKey))).catch(()=>{});}catch(e){if(active)setError(e instanceof Error?e.message:String(e));}finally{if(active)setLoading(false);}};
+    const refresh=async()=>{try{const response=await fetch(siteUrl(`/api/v1/shared?token=${encodeURIComponent(token)}`),{cache:"no-store",credentials:"omit",referrerPolicy:"no-referrer"});const result=await response.json();if(!active)return;if(!response.ok){setFile(null);throw Error(result.error||"Shared document unavailable.");}setFile(result.document);setError("");document.title=`${result.document.name} — Harfsaz`;void ensureAllDocumentFonts(result.document.content.pages.flatMap((p:DocFile["pages"][number])=>p.frames.flatMap(frameFontKeys))).catch(()=>{});}catch(e){if(active)setError(e instanceof Error?e.message:String(e));}finally{if(active)setLoading(false);}};
     void refresh();window.addEventListener("focus",refresh);const timer=window.setInterval(refresh,30000);
     return()=>{active=false;window.removeEventListener("focus",refresh);window.clearInterval(timer);};
   },[token]);

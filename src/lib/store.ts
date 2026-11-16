@@ -72,6 +72,16 @@ export interface Page {
   pageNumber?: { value: number; style: NumberStyle };
 }
 
+export type FrameTypography = Pick<TextFrame, "fontKey" | "fontSize" | "lineHeight" | "letterSpacing">;
+
+export function documentTypography(pages: Page[]): FrameTypography | undefined {
+  const frame = pages[0]?.frames.find(f => f.isPageFrame) ??
+    pages[0]?.frames.find(f => !f.kind || f.kind === "text");
+  if (!frame) return;
+  const { fontKey, fontSize, lineHeight, letterSpacing } = frame;
+  return { fontKey, fontSize, lineHeight, letterSpacing };
+}
+
 export type Tool = "select" | "text" | "image" | "shape";
 
 /** Serializable document payload written to a .harfsaz file. */
@@ -105,6 +115,7 @@ interface DocState {
   setTool: (tool: Tool) => void;
   addPage: () => void;
   configurePages: (setup: PageSetup) => void;
+  updateDocumentTypography: (patch: Partial<FrameTypography>) => void;
   addFrame: (pageId: string) => void;
   /** Insert a frame of `kind` at an explicit rect (from draw-to-create). */
   addFrameAt: (
@@ -346,6 +357,14 @@ export const useDoc = create<DocState>((set, get) => {
     })) };
   }),
 
+  updateDocumentTypography: (patch) => set((s) => ({
+    ...snapshot(s),
+    pages: s.pages.map(page => ({
+      ...page,
+      frames: page.frames.map(frame => !frame.kind || frame.kind === "text" ? { ...frame, ...patch } : frame),
+    })),
+  })),
+
   addPage: () =>
     set((s) => {
       const p = makePage();
@@ -355,7 +374,7 @@ export const useDoc = create<DocState>((set, get) => {
         if (previous.pageNumber) p.pageNumber = { ...previous.pageNumber, value: previous.pageNumber.value + 1 };
         const main = previous.frames.find(f => f.isPageFrame);
         p.frames[0] = { ...p.frames[0], ...(main ? { fontKey: main.fontKey, fontSize: main.fontSize, lang: main.lang, dir: main.dir, align: main.align } : {}),
-          text: "", x: p.margin, y: p.margin, width: p.width - 2 * p.margin, height: p.height - 2 * p.margin };
+          ...documentTypography(s.pages), text: "", x: p.margin, y: p.margin, width: p.width - 2 * p.margin, height: p.height - 2 * p.margin };
       }
       return {
         ...snapshot(s),
@@ -367,7 +386,7 @@ export const useDoc = create<DocState>((set, get) => {
 
   addFrame: (pageId) =>
     set((s) => {
-      const f = makeFrame();
+      const f = { ...makeFrame(), ...documentTypography(s.pages) };
       return {
         ...snapshot(s),
         pages: s.pages.map((p) =>
@@ -379,7 +398,7 @@ export const useDoc = create<DocState>((set, get) => {
 
   addFrameAt: (pageId, kind, rect, extra) =>
     set((s) => {
-      const f = makeFrameAt(kind, rect, extra);
+      const f = makeFrameAt(kind, rect, kind === "text" ? { ...documentTypography(s.pages), ...extra } : extra);
       return {
         ...snapshot(s),
         pages: s.pages.map((p) =>

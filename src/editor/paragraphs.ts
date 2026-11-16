@@ -84,5 +84,5 @@ export function formatList(root: HTMLElement, numerals: NumeralStyle): void {
 
 /** The outline renderer currently cannot reproduce rich paragraph layout. */
 export function needsRichLayout(html?: string): boolean {
-  return !!html && /data-harfsaz-table|data-harfsaz-style|<(?:ol|ul|li|h[1-6])\b|margin-(?:inline|block)|text-indent|list-style|(?:^|[;\s"\'])color\s*:|<font\b[^>]*color=/i.test(html);
+  return !!html && /data-harfsaz-typography|data-harfsaz-table|data-harfsaz-style|<(?:ol|ul|li|h[1-6])\b|margin-(?:inline|block)|text-indent|list-style|(?:^|[;\s"\'])color\s*:|<font\b[^>]*color=/i.test(html);
 }

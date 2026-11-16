@@ -40,7 +40,7 @@ const UNWRAP_TAGS = new Set(["FONT", "TT", "CODE", "KBD", "SAMP", "VAR", "PRE", 
 const DROP_TAGS = new Set(["SCRIPT", "STYLE", "META", "LINK", "HEAD", "TITLE", "TEMPLATE", "IFRAME", "OBJECT"]);
 
 const ALLOWED_TAGS = new Set("DIV P BR SPAN STRONG EM B I U S STRIKE SUP SUB OL UL LI TABLE THEAD TBODY TFOOT TR TH TD CAPTION COLGROUP COL H1 H2 H3 H4 H5 H6 BLOCKQUOTE".split(" "));
-const ALLOWED_ATTRS = new Set(["style", "dir", "colspan", "rowspan", "start", "data-harfsaz-style", "data-harfsaz-table"]);
+const ALLOWED_ATTRS = new Set(["style", "dir", "colspan", "rowspan", "start", "data-harfsaz-style", "data-harfsaz-table", "data-harfsaz-typography"]);
 const ALLOWED_STYLES = new Set(["color", "font-size", "font-weight", "font-style", "text-decoration", "text-decoration-line", "text-align", "line-height", "margin-left", "margin-right", "margin-top", "margin-bottom", "padding", "padding-left", "padding-right", "border", "border-width", "border-color", "border-style", "border-collapse", "width", "height", "vertical-align", "border-image-source", "border-image-slice", "border-image-width", "border-image-outset", "border-image-repeat", "padding-top", "padding-bottom", "table-layout", "list-style-type", "list-style-position", "text-indent", "margin-inline-start", "margin-inline-end", "margin-block", "margin-block-start", "margin-block-end", "padding-inline-start", "padding-inline-end"]);
 
 /**
@@ -82,8 +82,10 @@ export function sanitizeStoredHtml(html: string | undefined): string | undefined
       for (const prop of Array.from(style)) {
         const ownParagraph = /^(DIV|P|LI|H[1-6])$/.test(el.tagName) &&
           ["body", "heading", "subheading", "caption"].includes(el.getAttribute("data-harfsaz-style") ?? "");
+        const scopedMetric = el.hasAttribute("data-harfsaz-typography") &&
+          ["font-family", "font-size", "line-height", "letter-spacing"].includes(prop);
         const paragraphMetric = ownParagraph && (prop === "font-size" || prop === "line-height");
-        if ((!ALLOWED_STYLES.has(prop) && !/^border-(top|right|bottom|left)(-(width|style|color))?$/.test(prop)) || /url\s*\(|expression|@import|var\s*\(/i.test(style.getPropertyValue(prop)) || (STRIP_STYLE_PROPS.has(prop) && !paragraphMetric)) style.removeProperty(prop);
+        if ((!scopedMetric && !ALLOWED_STYLES.has(prop) && !/^border-(top|right|bottom|left)(-(width|style|color))?$/.test(prop)) || /url\s*\(|expression|@import|var\s*\(/i.test(style.getPropertyValue(prop)) || (STRIP_STYLE_PROPS.has(prop) && !paragraphMetric && !scopedMetric)) style.removeProperty(prop);
       }
       if (!style.length) el.removeAttribute("style");
     }

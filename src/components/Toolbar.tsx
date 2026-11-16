@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { captureColorSelection, applySelectionColor, ColorSelection } from "../editor/selectionColor";
-import { useDoc, useSelectedFrame, TextFrame } from "../lib/store";
+import { documentTypography, FrameTypography, useDoc, useSelectedFrame, TextFrame } from "../lib/store";
 import { IconTip } from "./ui/tooltip";
 import { Select, SelectOption } from "./ui/select";
 import { ColorButton } from "./ui/colorpicker";
@@ -15,8 +15,10 @@ import {
   LetterSpacing,
   TypeGlyph,
 } from "./ui/icons";
-import { FONTS, FONT_STYLE_ORDER } from "../lib/font";
+import { FONTS, FONT_STYLE_ORDER, getFont } from "../lib/font";
 import { LANGUAGES, languagePatch } from "../lib/languages";
+import { editorForFrame, rangeInEditor, selectedParagraphs } from "../editor/paragraphs";
+import { applyTypography, TypographyProperty, TypographyTarget } from "../editor/typography";
 import { applyFormat, applyAlign } from "../editor/format";
 
 const FONT_OPTIONS: SelectOption[] = FONT_STYLE_ORDER.flatMap((style) =>
@@ -48,7 +50,67 @@ export function Toolbar() {
   const dis = !sel || (f?.kind !== undefined && f.kind !== "text");
 
   const patch = (p: Partial<TextFrame>) => sel && updateFrame(sel.page.id, sel.frame.id, p);
-  const setSize = (n: number) => patch({ fontSize: Math.max(8, Math.min(400, n)) });
+
+  const toolbar = useRef<HTMLDivElement>(null);
+  const typography = useRef<TypographyTarget | null>(null);
+  const [scope, setScope] = useState("context");
+  const pages = useDoc(s => s.pages);
+  const updateDocumentTypography = useDoc(s => s.updateDocumentTypography);
+  const [metrics, setMetrics] = useState<{ font: string; size: number; leading: number; spacing: number } | null>(null);
+  const frameId = f?.id;
+  useEffect(() => {
+    function track() {
+      const host = frameId && editorForFrame(frameId);
+      const selection = window.getSelection();
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+      if (host && range && rangeInEditor(host, range)) {
+        typography.current = { host, range: range.cloneRange() };
+        const start = range.startContainer;
+        const element = start instanceof Element ? start : start.parentElement;
+        if (element) {
+          const css = getComputedStyle(element);
+          const size = parseFloat(css.fontSize);
+          const block = selectedParagraphs(host, range)[0] ?? element.closest("td,th") ?? element;
+          const paragraphCss = getComputedStyle(block);
+          setMetrics({
+            font: FONTS.find(font => font.cssFamily === css.fontFamily.split(",")[0].trim().replace(/^["']|["']$/g, ""))?.key ?? "",
+            size,
+            leading: parseFloat(paragraphCss.lineHeight) / parseFloat(paragraphCss.fontSize) || 1.7,
+            spacing: parseFloat(css.letterSpacing) || 0,
+          });
+        }
+      } else if (!toolbar.current?.contains(document.activeElement) &&
+          !document.activeElement?.closest("[role=listbox],[role=option]")) {
+        typography.current = null;
+        setMetrics(null);
+      }
+    }
+    typography.current = null;
+    setMetrics(null);
+    document.addEventListener("selectionchange", track);
+    document.addEventListener("focusin", track);
+    track();
+    return () => {
+      document.removeEventListener("selectionchange", track);
+      document.removeEventListener("focusin", track);
+    };
+  }, [frameId]);
+
+  const current = scope === "context" ? metrics : null;
+  const defaults = scope === "document" ? documentTypography(pages) : f;
+  function formatTypography(property: TypographyProperty, value: string, typographyPatch: Partial<FrameTypography>) {
+    const target = typography.current;
+    if (scope === "context" && target && target.host.dataset.frameId === frameId) {
+      applyTypography(target, property, value);
+      return;
+    }
+    if (scope === "document") updateDocumentTypography(typographyPatch);
+    else patch(typographyPatch);
+  }
+  const setSize = (n: number) => {
+    const size = Math.max(8, Math.min(400, n));
+    formatTypography("font-size", `${size}px`, { fontSize: size });
+  };
 
   // True when text is currently selected inside an editor — so format applies to
   // the selection (rich text). Otherwise we fall back to frame-level styling.
@@ -103,7 +165,7 @@ export function Toolbar() {
   const keepSelection = (e: React.MouseEvent) => e.preventDefault();
 
   return (
-    <div aria-label="Text formatting" className="format-toolbar flex shrink-0 items-center gap-3 overflow-x-auto border-b border-line bg-surface px-5 py-3">
+    <div ref={toolbar} aria-label="Text formatting" className="format-toolbar flex shrink-0 items-center gap-3 overflow-x-auto border-b border-line bg-surface px-5 py-3">
       {/* Language / keyboard */}
       <Group label="Language">
         <Select
@@ -116,13 +178,22 @@ export function Toolbar() {
         />
       </Group>
 
+      <Group label="Apply typography to">
+        <select aria-label="Typography scope" value={scope} onChange={e => setScope(e.target.value)}
+          className="h-8 rounded-lg border border-line bg-paper px-2 text-xs">
+          <option value="context">Selection or paragraph</option>
+          <option value="frame">Frame defaults</option>
+          <option value="document">Document defaults</option>
+        </select>
+      </Group>
+
       {/* Font */}
       <Group label="Font">
         <Select
           ariaLabel="Font"
-          value={f?.fontKey ?? "noto-nastaliq"}
+          value={current?.font || defaults?.fontKey || "noto-nastaliq"}
           disabled={dis}
-          onChange={(v) => patch({ fontKey: v })}
+          onChange={(v) => formatTypography("font-family", `"${getFont(v).cssFamily}", serif`, { fontKey: v })}
           options={FONT_OPTIONS}
           className="w-[170px]"
         />
@@ -134,23 +205,22 @@ export function Toolbar() {
           <button
             disabled={dis}
             aria-label="Decrease font size"
-            onClick={() => setSize((f?.fontSize ?? 32) - 2)}
+            onClick={() => setSize((current?.size ?? defaults?.fontSize ?? 32) - 2)}
             className="flex h-full w-7 items-center justify-center rounded-l-lg text-ink-soft transition-colors hover:bg-paper-edge hover:text-ink disabled:opacity-45"
           >
             <Minus size={14} />
           </button>
-          <input
-            type="number"
+          <MetricInput
             aria-label="Font size"
-            value={f?.fontSize ?? 32}
+            value={current?.size ?? defaults?.fontSize ?? 32}
             disabled={dis}
-            onChange={(e) => setSize(Number(e.target.value) || 32)}
+            onCommit={setSize}
             className="h-full w-10 border-x border-line bg-transparent text-center text-[13px] font-semibold tabular-nums outline-none disabled:opacity-45 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
           />
           <button
             disabled={dis}
             aria-label="Increase font size"
-            onClick={() => setSize((f?.fontSize ?? 32) + 2)}
+            onClick={() => setSize((current?.size ?? defaults?.fontSize ?? 32) + 2)}
             className="flex h-full w-7 items-center justify-center rounded-r-lg text-ink-soft transition-colors hover:bg-paper-edge hover:text-ink disabled:opacity-45"
           >
             <Plus size={14} />
@@ -207,23 +277,23 @@ export function Toolbar() {
       <Group label="Line height">
         <Stepper
           icon={<LineHeight size={13} className="text-ink-soft" />}
-          tip="Line spacing"
-          value={f?.lineHeight ?? 1.7}
+          tip="Paragraph line spacing"
+          value={current?.leading ?? defaults?.lineHeight ?? 1.7}
           step={0.1}
           min={1}
           max={4}
           disabled={dis}
-          onChange={(n) => patch({ lineHeight: n || 1.7 })}
+          onChange={(n) => formatTypography("line-height", String(n), { lineHeight: n })}
         />
       </Group>
       <Group label="Letter spacing">
         <Stepper
           icon={<LetterSpacing size={13} className="text-ink-soft" />}
           tip="Letter spacing in pixels"
-          value={f?.letterSpacing ?? 0}
+          value={current?.spacing ?? defaults?.letterSpacing ?? 0}
           step={0.5}
           disabled={dis}
-          onChange={(n) => patch({ letterSpacing: n || 0 })}
+          onChange={(n) => formatTypography("letter-spacing", `${n}px`, { letterSpacing: n })}
         />
       </Group>
     </div>
@@ -283,15 +353,14 @@ function Stepper({
     <IconTip label={tip}>
       <div className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-paper/60 px-2.5">
         {icon}
-        <input
-          type="number"
+        <MetricInput
           aria-label={tip}
           step={step}
           min={min}
           max={max}
           value={value}
           disabled={disabled}
-          onChange={(e) => onChange(Number(e.target.value))}
+          onCommit={onChange}
           className="w-9 bg-transparent text-center text-[13px] font-medium tabular-nums outline-none disabled:opacity-45 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
         />
       </div>
@@ -326,4 +395,22 @@ function Toggle({
       </button>
     </IconTip>
   );
+}
+
+function MetricInput({ value, onCommit, ...props }: Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange"> & {
+  value: number;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return <input {...props} type="number" value={draft ?? Number(value.toFixed(2))}
+    onChange={e => setDraft(e.target.value)}
+    onKeyDown={e => {
+      if (e.key === "Enter") e.currentTarget.blur();
+      if (e.key === "Escape") setDraft(null);
+    }}
+    onBlur={e => {
+      const next = e.currentTarget.valueAsNumber;
+      setDraft(null);
+      if (draft !== null && Number.isFinite(next) && next >= Number(props.min ?? -Infinity) && next <= Number(props.max ?? Infinity)) onCommit(next);
+    }} />;
 }

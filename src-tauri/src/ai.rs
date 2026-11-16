@@ -37,6 +37,8 @@ enum Provider {
     Mistral,
     OpenAi,
     ClaudeCli,
+    Gemini,
+    Custom,
 }
 
 struct ProviderConfig {
@@ -67,24 +69,40 @@ fn resolve_provider() -> ProviderConfig {
 
     let model_for = |default: &str| saved_model.clone().unwrap_or_else(|| env_or("HARFSAZ_AI_MODEL", default));
 
+    let endpoint_for = |default: &str| {
+        if saved.provider.is_empty() { env_or("HARFSAZ_AI_BASE_URL", default) } else { default.to_string() }
+    };
+
     match name.as_str() {
         "deepseek" => ProviderConfig {
             provider: Provider::DeepSeek,
-            base_url: env_or("HARFSAZ_AI_BASE_URL", "https://api.deepseek.com/v1/chat/completions"),
+            base_url: endpoint_for("https://api.deepseek.com/v1/chat/completions"),
             api_key: saved_key.or_else(|| first_env(&["HARFSAZ_DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY", "HARFSAZ_AI_API_KEY"])),
             default_model: model_for("deepseek-chat"),
         },
         "mistral" => ProviderConfig {
             provider: Provider::Mistral,
-            base_url: env_or("HARFSAZ_AI_BASE_URL", "https://api.mistral.ai/v1/chat/completions"),
+            base_url: endpoint_for("https://api.mistral.ai/v1/chat/completions"),
             api_key: saved_key.or_else(|| first_env(&["HARFSAZ_MISTRAL_API_KEY", "MISTRAL_API_KEY", "HARFSAZ_AI_API_KEY"])),
             default_model: model_for("mistral-large-latest"),
         },
         "openai" => ProviderConfig {
             provider: Provider::OpenAi,
-            base_url: env_or("HARFSAZ_AI_BASE_URL", "https://api.openai.com/v1/chat/completions"),
+            base_url: endpoint_for("https://api.openai.com/v1/chat/completions"),
             api_key: saved_key.or_else(|| first_env(&["HARFSAZ_OPENAI_API_KEY", "OPENAI_API_KEY", "HARFSAZ_AI_API_KEY"])),
             default_model: model_for("gpt-4o"),
+        },
+        "gemini" => ProviderConfig {
+            provider: Provider::Gemini,
+            base_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions".into(),
+            api_key: saved_key.or_else(|| first_env(&["GEMINI_API_KEY", "GOOGLE_API_KEY"])),
+            default_model: model_for("gemini-2.5-flash"),
+        },
+        "custom" => ProviderConfig {
+            provider: Provider::Custom,
+            base_url: saved.endpoint.clone(),
+            api_key: saved_key,
+            default_model: saved.model.clone(),
         },
         "claude-cli" | "claude_cli" => ProviderConfig {
             provider: Provider::ClaudeCli,
@@ -121,6 +139,8 @@ pub fn provider_name() -> String {
         Provider::Mistral => "Mistral",
         Provider::OpenAi => "OpenAI",
         Provider::ClaudeCli => "Claude CLI",
+        Provider::Gemini => "Google Gemini",
+        Provider::Custom => "Custom provider",
     }
     .to_string()
 }
@@ -165,6 +185,7 @@ pub struct ChatMessage {
 /// Multi-turn chat with conversation context. Sends the full message history so
 /// the model remembers earlier turns in the session.
 pub async fn chat(messages: Vec<ChatMessage>, system: String) -> Result<AiResponse, String> {
+    let system = with_custom_prompt(&system);
     let cfg = resolve_provider();
     let model = cfg.default_model.clone();
 
@@ -197,12 +218,25 @@ pub async fn chat(messages: Vec<ChatMessage>, system: String) -> Result<AiRespon
     })
 }
 
+fn with_custom_prompt(system: &str) -> String {
+    let custom = crate::settings::load().system_prompt;
+    if custom.is_empty() { system.to_string() } else { format!("{system}\n\n{custom}") }
+}
+
+fn provider_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|_| "Could not initialize AI connection.".into())
+}
+
 async fn chat_anthropic(cfg: &ProviderConfig, model: &str, system: &str, msgs: &[serde_json::Value]) -> Result<LlmResult, String> {
     let api_key = cfg.api_key.clone().ok_or_else(|| "No API key set.".to_string())?;
     let body = serde_json::json!({
         "model": model, "max_tokens": 2048, "system": system, "messages": msgs
     });
-    let resp = reqwest::Client::new()
+    let resp = provider_client()?
         .post(&cfg.base_url)
         .header("x-api-key", api_key)
         .header("anthropic-version", ANTHROPIC_VERSION)
@@ -224,13 +258,26 @@ async fn chat_anthropic(cfg: &ProviderConfig, model: &str, system: &str, msgs: &
     Ok(LlmResult { text, input_tokens: it, output_tokens: ot })
 }
 
+fn completions_body(
+    cfg: &ProviderConfig, model: &str, max_tokens: u32, messages: serde_json::Value,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({ "model": model, "messages": messages });
+    let limit = if cfg.provider == Provider::OpenAi && cfg.base_url == "https://api.openai.com/v1/chat/completions" {
+        "max_completion_tokens"
+    } else {
+        "max_tokens"
+    };
+    body[limit] = max_tokens.into();
+    body
+}
+
 async fn chat_openai(cfg: &ProviderConfig, model: &str, system: &str, msgs: &[serde_json::Value]) -> Result<LlmResult, String> {
     let api_key = cfg.api_key.clone().ok_or_else(|| "No API key set for the selected provider.".to_string())?;
     // Prepend the system message (OpenAI format).
     let mut all = vec![serde_json::json!({ "role": "system", "content": system })];
     all.extend_from_slice(msgs);
-    let body = serde_json::json!({ "model": model, "max_tokens": 2048, "messages": all });
-    let resp = reqwest::Client::new()
+    let body = completions_body(cfg, model, 2048, serde_json::json!(all));
+    let resp = provider_client()?
         .post(&cfg.base_url)
         .header("authorization", format!("Bearer {api_key}"))
         .header("content-type", "application/json")
@@ -261,7 +308,7 @@ async fn call_anthropic(cfg: &ProviderConfig, model: &str, system: &str, user: &
         "system": system,
         "messages": [{ "role": "user", "content": user }]
     });
-    let resp = reqwest::Client::new()
+    let resp = provider_client()?
         .post(&cfg.base_url)
         .header("x-api-key", api_key)
         .header("anthropic-version", ANTHROPIC_VERSION)
@@ -291,15 +338,11 @@ async fn call_openai_compatible(cfg: &ProviderConfig, model: &str, system: &str,
     let api_key = cfg.api_key.clone().ok_or_else(|| {
         "No API key set for the selected provider. Set HARFSAZ_AI_API_KEY (or the provider-specific key).".to_string()
     })?;
-    let body = serde_json::json!({
-        "model": model,
-        "max_tokens": 2048,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": user }
-        ]
-    });
-    let resp = reqwest::Client::new()
+    let body = completions_body(cfg, model, 2048, serde_json::json!([
+        { "role": "system", "content": system },
+        { "role": "user", "content": user }
+    ]));
+    let resp = provider_client()?
         .post(&cfg.base_url)
         .header("authorization", format!("Bearer {api_key}"))
         .header("content-type", "application/json")
@@ -443,7 +486,7 @@ fn system_prompt(task: &AiTask) -> String {
 
 /// Execute an AI task against the configured LLM provider.
 pub async fn run_task(req: AiRequest) -> Result<AiResponse, String> {
-    let system = system_prompt(&req.task);
+    let system = with_custom_prompt(&system_prompt(&req.task));
 
     let mut user_content = req.text.clone();
     if let Some(instr) = &req.instruction {
@@ -511,7 +554,7 @@ pub async fn transform(
          Do not add quotation marks around your answer or any explanations."
     );
 
-    let res = call_llm(&system, &text, model.as_deref()).await?;
+    let res = call_llm(&with_custom_prompt(&system), &text, model.as_deref()).await?;
     if res.text.trim().is_empty() {
         return Err("The model returned an empty response.".into());
     }
@@ -814,7 +857,7 @@ async fn ocr_anthropic(
         }]
     });
 
-    let resp = reqwest::Client::new()
+    let resp = provider_client()?
         .post(&cfg.base_url)
         .header("x-api-key", api_key)
         .header("anthropic-version", ANTHROPIC_VERSION)
@@ -888,19 +931,15 @@ async fn ocr_openai(
         .clone()
         .ok_or_else(|| "No API key set for the selected provider. Add one in Settings.".to_string())?;
 
-    let body = serde_json::json!({
-        "model": model,
-        "max_tokens": 8192,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": [
-                { "type": "text", "text": user_text },
-                { "type": "image_url", "image_url": { "url": format!("data:{media_type};base64,{b64}") } }
-            ]}
-        ]
-    });
+    let body = completions_body(cfg, model, 8192, serde_json::json!([
+        { "role": "system", "content": system },
+        { "role": "user", "content": [
+            { "type": "text", "text": user_text },
+            { "type": "image_url", "image_url": { "url": format!("data:{media_type};base64,{b64}") } }
+        ]}
+    ]));
 
-    let resp = reqwest::Client::new()
+    let resp = provider_client()?
         .post(&cfg.base_url)
         .header("authorization", format!("Bearer {api_key}"))
         .header("content-type", "application/json")

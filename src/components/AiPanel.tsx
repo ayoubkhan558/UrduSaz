@@ -3,12 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import { CheckAll as CheckCheck, Sparkles, Settings } from "./ui/icons";
 import {
   aiChat,
+  localAiEnabled,
   aiProofreadInline,
   aiAddDiacritics,
   ChatMessage,
   isTauri,
 } from "../lib/tauri";
-import { CloudError, loginUrl, openAccountPage } from "../lib/cloud";
+import { CloudError, loginUrl } from "../lib/cloud";
 import { useDoc, useSelectedFrame } from "../lib/store";
 import { useSuggestions } from "../lib/suggestions";
 import { getLanguage } from "../lib/languages";
@@ -63,6 +64,7 @@ export function AiPanel() {
     rollDay();
   }, [rollDay]);
 
+  const [local, setLocal] = useState(false);
   const [keyOk, setKeyOk] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [proofBusy, setProofBusy] = useState(false);
@@ -81,7 +83,14 @@ export function AiPanel() {
   // Refresh account allowance after browser sign-in or a plan change.
   useEffect(() => {
     let active = true;
-    const check = () => syncCloud().then(() => { if (active) setKeyOk(useUsage.getState().cloud?.signedIn ?? false); });
+    const check = async () => {
+      const enabled = await localAiEnabled().catch(() => false);
+      if (!enabled) await syncCloud();
+      if (active) {
+        setLocal(enabled);
+        setKeyOk(enabled || (useUsage.getState().cloud?.signedIn ?? false));
+      }
+    };
     void check();
     window.addEventListener("focus", check);
     return () => {active = false; window.removeEventListener("focus", check);};
@@ -112,7 +121,7 @@ export function AiPanel() {
       else window.open(loginUrl(), "_blank", "noopener");
       return null;
     }
-    if (!canUse) {
+    if (!local && !canUse) {
       setError(
         isTauri()
           ? "Your AI allowance is used up. View your plan for more details."
@@ -122,7 +131,7 @@ export function AiPanel() {
       return null;
     }
     const res = await fn();
-    record(res.tokens);
+    if (!local) record(res.tokens);
     return res;
   }
 
@@ -226,9 +235,9 @@ export function AiPanel() {
                 Clear
               </button>
             )}
-            <button aria-label="AI plan" title="AI plan"
+            <button aria-label={isTauri() ? "AI settings" : "AI plan"} title={isTauri() ? "AI settings" : "AI plan"}
               className="rounded-md p-1 text-ink-soft hover:bg-paper-edge"
-              onClick={() => setUpgradeOpen(true)}><Settings size={16} /></button>
+              onClick={() => isTauri() ? setSettingsOpen(true) : setUpgradeOpen(true)}><Settings size={16} /></button>
           </div>
         </div>
       </div>
@@ -237,12 +246,13 @@ export function AiPanel() {
         <div className="ai-setup">
           <strong>A little help with your next draft.</strong>
           Sign in to write, translate, and proofread in Urdu, Persian, Arabic, or English.
-          {isTauri() ? <button onClick={() => openAccountPage().catch(e => setError(String(e)))}>Your Harfsaz account →</button>
+          {isTauri() ? <button onClick={() => setSettingsOpen(true)}>Configure AI →</button>
             : <a href={loginUrl()} target="_blank" rel="noopener">Sign in to Harfsaz →</a>}
         </div>
       )}
       {keyOk === null && <p role="status" className="text-xs text-ink-soft">Checking your AI allowance…</p>}
-      {keyOk === true && cloud && (
+      {local && <p className="px-4 text-xs text-ink-soft">Using your AI provider</p>}
+      {!local && keyOk === true && cloud && (
         <div className="ai-setup">
           <strong>{cloud.plan === "free" ? "Harfsaz AI · Free" : "Harfsaz AI · " + (cloud.plan === "org" ? "Organization" : "Pro")}</strong>
           <span>{remaining.toLocaleString()} of {cloud.actions} actions left {cloud.window === "day" ? "today" : "this month"}.</span>

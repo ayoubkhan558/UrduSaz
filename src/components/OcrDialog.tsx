@@ -6,7 +6,7 @@ import { useUi } from "../lib/ui";
 import { useUsage } from "../lib/usage";
 import { useDoc, useSelectedFrame, textToHtml } from "../lib/store";
 import { LANGUAGES, LangCode, languagePatch, getLanguage } from "../lib/languages";
-import { aiOcr, OcrMode } from "../lib/tauri";
+import { aiOcr, localAiEnabled, OcrMode } from "../lib/tauri";
 import { DEFAULT_FONT_KEY, ensureFontFace, getFont } from "../lib/font";
 import { Attachment, formatBytes, pickAttachment, readAttachment } from "../lib/image";
 
@@ -132,16 +132,18 @@ export function OcrDialog() {
 
   async function extract() {
     if (!file || busy) return;
-    if (!canUse) {
-      setError("Your AI allowance is used up. View your plan for more details.");
-      setUpgradeOpen(true);
-      return;
-    }
     const request = ++generation.current;
     setBusy(true);
     setError(null);
     setNote(null);
     try {
+      const local = await localAiEnabled();
+      if (request !== generation.current) return;
+      if (!local && !canUse) {
+        setError("Your AI allowance is used up. View your plan for more details.");
+        setUpgradeOpen(true);
+        return;
+      }
       const res = await aiOcr({
         data: file.dataUrl,
         mediaType: file.mediaType,
@@ -150,7 +152,7 @@ export function OcrDialog() {
         diacritics,
         instruction: instruction.trim() || undefined,
       });
-      record(res.tokens);
+      if (!local) record(res.tokens);
       if (request !== generation.current) return;
       setResult(res.text);
       setNote(`Transcribed with ${res.model}.${lang === "auto" ? " Choose the result language before inserting so the correct font and direction are used." : ""}`);

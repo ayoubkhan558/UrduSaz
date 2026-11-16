@@ -86,6 +86,14 @@ export function layoutText(
 
 // ---- AI ----
 
+export function localAiEnabled(): Promise<boolean> {
+  return isTauri() ? invoke<boolean>("local_ai_enabled") : Promise.resolve(false);
+}
+
+async function runAi<T>(command: string, params: Record<string, unknown>, body: Record<string, unknown>): Promise<T> {
+  return await localAiEnabled() ? invoke<T>(command, params) : cloudAi<T>(body);
+}
+
 export type AiTask =
   | { kind: "write"; mode: "compose" | "continue" | "rephrase" | "tone"; tone?: string }
   | { kind: "proofread" }
@@ -104,7 +112,7 @@ export function aiTask(params: {
   instruction?: string;
   model?: string;
 }): Promise<AiResponse> {
-  return cloudAi<AiResponse>({ op: "task", task: params.task, text: params.text, instruction: params.instruction });
+  return runAi<AiResponse>("ai_task", { req: params }, { op: "task", task: params.task, text: params.text, instruction: params.instruction });
 }
 
 export interface ChatMessage {
@@ -114,7 +122,7 @@ export interface ChatMessage {
 
 /** Multi-turn chat with conversation context (the AI panel thread). */
 export function aiChat(messages: ChatMessage[], system: string): Promise<AiResponse> {
-  return cloudAi<AiResponse>({ op: "chat", messages, system });
+  return runAi<AiResponse>("ai_chat", { messages, system }, { op: "chat", messages, system });
 }
 
 export interface Correction {
@@ -129,13 +137,13 @@ export interface ProofreadResult {
 }
 
 /** Inline, non-destructive proofread: returns span-level corrections to apply. */
-export function aiProofreadInline(text: string, _model?: string): Promise<ProofreadResult> {
-  return cloudAi<ProofreadResult>({ op: "proofread_inline", text });
+export function aiProofreadInline(text: string, model?: string): Promise<ProofreadResult> {
+  return runAi<ProofreadResult>("ai_proofread_inline", { text, model }, { op: "proofread_inline", text });
 }
 
 /** Add diacritics/harakat (تشكيل) to RTL text. lang = base code (ar/fa/ur). */
-export function aiAddDiacritics(text: string, lang: string, _model?: string): Promise<AiResponse> {
-  return cloudAi<AiResponse>({ op: "diacritics", text, lang });
+export function aiAddDiacritics(text: string, lang: string, model?: string): Promise<AiResponse> {
+  return runAi<AiResponse>("ai_add_diacritics", { text, lang, model }, { op: "diacritics", text, lang });
 }
 
 export type TransformAction =
@@ -151,7 +159,7 @@ export function aiTransform(params: {
   model?: string;
 }): Promise<AiResponse> {
   {
-    return cloudAi<AiResponse>({ op: "transform", text: params.text, action: params.action, instruction: params.instruction, lang: params.lang });
+    return runAi<AiResponse>("ai_transform", params, { op: "transform", text: params.text, action: params.action, instruction: params.instruction, lang: params.lang });
   }
 }
 
@@ -180,7 +188,7 @@ export function aiOcr(params: {
   model?: string;
 }): Promise<OcrResult> {
   {
-    return cloudAi<OcrResult>({
+    return runAi<OcrResult>("ai_ocr", params, {
       op: "ocr",
       data: params.data,
       mediaType: params.mediaType,
@@ -206,19 +214,21 @@ export interface AiSettingsView {
   provider: string;
   model: string;
   has_key: boolean;
+  endpoint: string;
+  system_prompt: string;
 }
 
 /** Read saved AI settings (provider/model + whether a key is stored). */
 export function getAiSettings(): Promise<AiSettingsView> {
-  if (!isTauri()) return Promise.resolve({ provider: "", model: "", has_key: false });
+  if (!isTauri()) return Promise.resolve({ provider: "", model: "", has_key: false, endpoint: "", system_prompt: "" });
   return invoke<AiSettingsView>("get_ai_settings");
 }
 
 /** Save AI settings locally (provider, key, model). A blank key keeps the
  *  currently-stored one — use `clearAiKey` to remove it. */
-export function setAiSettings(provider: string, apiKey: string, model: string): Promise<void> {
+export function setAiSettings(provider: string, apiKey: string, model: string, endpoint: string, systemPrompt: string): Promise<void> {
   ensureTauri("AI settings");
-  return invoke<void>("set_ai_settings", { provider, apiKey, model });
+  return invoke<void>("set_ai_settings", { provider, apiKey, model, endpoint, systemPrompt });
 }
 
 /** Forget the stored API key (keeps the provider/model choice). */

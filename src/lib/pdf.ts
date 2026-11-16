@@ -5,7 +5,7 @@ import jsPDF from "jspdf";
 import html2canvas from "html2canvas-pro";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { tempDir, join } from "@tauri-apps/api/path";
-import { ensureAllDocumentFonts } from "./font";
+import { frameFontKeys, ensureAllDocumentFonts } from "./font";
 import { useDoc } from "./store";
 import { isTauri } from "./tauri";
 import { downloadBytes } from "./download";
@@ -28,7 +28,7 @@ export async function renderPagesToPdfFile(opts: {
   // away would previously produce a generic-looking PDF. Register and await
   // every font the document actually uses before capturing.
   await ensureAllDocumentFonts(
-    useDoc.getState().pages.flatMap((p) => p.frames.map((f) => f.fontKey))
+    useDoc.getState().pages.flatMap((p) => p.frames.flatMap(frameFontKeys))
   );
 
   // Editing chrome lives INSIDE .page (selection outline, resize grips, the move
