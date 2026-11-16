@@ -202,3 +202,18 @@ export async function ensureAllDocumentFonts(fontKeys: Iterable<string>): Promis
 export function loadNastaliqFont(): Promise<Uint8Array> {
   return loadFontBytes(DEFAULT_FONT_KEY);
 }
+
+
+/** Font registrations needed by a rich-text frame in the editor, sharing and export. */
+export function frameFontKeys(frame: { fontKey: string; html?: string }): string[] {
+  const keys = [frame.fontKey];
+  if (!frame.html?.includes("data-harfsaz-typography")) return keys;
+  const template = document.createElement("template");
+  template.innerHTML = frame.html;
+  template.content.querySelectorAll<HTMLElement>("[data-harfsaz-typography]").forEach(element => {
+    const family = element.style.fontFamily.split(",")[0].trim().replace(/^["']|["']$/g, "");
+    const font = FONTS.find(candidate => candidate.cssFamily === family);
+    if (font) keys.push(font.key);
+  });
+  return keys;
+}

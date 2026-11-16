@@ -152,25 +152,55 @@ fn get_ai_settings() -> settings::AiSettingsView {
 /// preserved, so the UI never has to read a key back to re-save the other
 /// fields. Use `clear_ai_key` to actually remove a stored key.
 #[tauri::command]
-fn set_ai_settings(provider: String, api_key: String, model: String) -> Result<(), String> {
-    let key = if api_key.trim().is_empty() {
-        settings::load().api_key // keep existing
+fn set_ai_settings(
+    provider: String, api_key: String, model: String, endpoint: String, system_prompt: String,
+) -> Result<(), String> {
+    let provider = provider.trim().to_lowercase();
+    if !matches!(provider.as_str(), "" | "anthropic" | "openai" | "gemini" | "custom" | "deepseek" | "mistral" | "claude-cli") {
+        return Err("Unknown AI provider.".into());
+    }
+    let endpoint = endpoint.trim();
+    if provider == "custom" {
+        let url = reqwest::Url::parse(endpoint).map_err(|_| "Enter a valid chat completions URL.")?;
+        if url.scheme() != "https" || url.host().is_none() || !url.username().is_empty() ||
+            url.password().is_some() || url.query().is_some() || url.fragment().is_some() {
+            return Err("Use an HTTPS chat completions URL without credentials, query or fragment.".into());
+        }
+        if model.trim().is_empty() {
+            return Err("Enter the model ID for your custom endpoint.".into());
+        }
+    }
+    let current = settings::load();
+    let endpoint = if provider == "custom" { endpoint } else { "" };
+    let key = if provider.is_empty() || provider == "claude-cli" {
+        String::new()
+    } else if api_key.trim().is_empty() && provider == current.provider && endpoint == current.endpoint {
+        current.api_key
     } else {
-        api_key
+        api_key.trim().to_string()
     };
-    settings::save(&settings::AiSettings { provider, api_key: key, model })
+    if !provider.is_empty() && provider != "claude-cli" && key.is_empty() {
+        return Err("Enter an API key for this provider.".into());
+    }
+    settings::save(&settings::AiSettings {
+        provider, api_key: key, model: model.trim().to_string(),
+        endpoint: endpoint.to_string(), system_prompt: system_prompt.trim().to_string(),
+    })
 }
 
-/// Forget the stored API key (keeps provider/model). The UI's "Remove key"
-/// action — previously unreachable, since saving a blank key preserves it.
+/// Forget the stored API key and return to hosted AI.
 #[tauri::command]
 fn clear_ai_key() -> Result<(), String> {
+    let mut current = settings::load();
+    current.api_key.clear();
+    current.provider.clear();
+    settings::save(&current)
+}
+
+#[tauri::command]
+fn local_ai_enabled() -> bool {
     let current = settings::load();
-    settings::save(&settings::AiSettings {
-        provider: current.provider,
-        api_key: String::new(),
-        model: current.model,
-    })
+    !current.provider.is_empty() && ai::is_configured()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -196,6 +226,7 @@ pub fn run() {
             ai_provider,
             get_ai_settings,
             set_ai_settings,
+            local_ai_enabled,
             clear_ai_key
         ])
         .run(tauri::generate_context!())

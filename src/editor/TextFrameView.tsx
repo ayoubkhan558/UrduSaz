@@ -7,7 +7,7 @@ import { RichEditor } from "./RichEditor";
 import { ResizeHandles } from "./ResizeHandles";
 import { useFrameTransform } from "./useFrameTransform";
 import { Shape } from "./shapes";
-import { ensureFontFace, getFont } from "../lib/font";
+import { ensureAllDocumentFonts, frameFontKeys, getFont } from "../lib/font";
 import { getLanguage } from "../lib/languages";
 import { useSuggestions } from "../lib/suggestions";
 import { useUi } from "../lib/ui";
@@ -53,8 +53,8 @@ export function TextFrameView({ pageId, frame }: { pageId: string; frame: TextFr
 
   // Register the @font-face so the edit layer renders this family.
   useEffect(() => {
-    ensureFontFace(frame.fontKey).catch(() => {});
-  }, [frame.fontKey]);
+    void ensureAllDocumentFonts(frameFontKeys(frame));
+  }, [frame.fontKey, frame.html]);
 
   // Rich editor change: store both the HTML (rich) and plain text (AI/count).
   function handleRichChange(html: string, text: string, checkpoint = false) {
